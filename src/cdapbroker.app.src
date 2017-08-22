@@ -1,0 +1,23 @@
+{application, cdapbroker,
+ [{description, "Interface between Consul and CDAP in DCAE"},
+  {vsn, "4.0.3"},
+  {registered, []},
+  {mod, { cdapbroker_app, []}},
+  {applications,
+   [kernel,
+    stdlib,
+    lager,
+    inets,
+    ssl,
+    jiffy,
+    mnesia,
+    leptus,
+    uuid,
+    iso8601
+   ]},
+  {env,[]},
+  {modules, []},
+  {maintainers, []},
+  {licenses, []},
+  {links, []}
+ ]}.

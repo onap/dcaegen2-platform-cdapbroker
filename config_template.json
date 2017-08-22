@@ -1,0 +1,1 @@
+{"autoderegisterafter": "10m", "cdap_cluster_to_manage": "{{cdap_cluster}}", "bindingttw": 5, "hcinterval": "5s"}

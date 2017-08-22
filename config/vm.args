@@ -1,0 +1,9 @@
+# only show the programmed prompt
+-noshell
+
+## Name of the node
+-sname cdapbroker@localhost
+
+## Cookie for distributed erlang
+-setcookie cdapbroker
+
