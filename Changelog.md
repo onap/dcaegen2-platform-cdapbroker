@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/) 
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [4.0.4] - Aug 29 2017
+* Cleanup cdap undeploy code and fix misleading log statements
+* Attempt to add ONAP build artifacts
+
+## [4.0.3] - Missing =(
+
 ## [4.0.2] - July 26 2017
 * Make testing magical so that it runs on localhost or in Docker the same
 * Code cleanups in workflows thanks to abstraction provided by Garry
