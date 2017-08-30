@@ -48,9 +48,15 @@ generate-sources)
   ;;
 compile)
   echo "==> compile phase script"
+  echo "=====> building "
+  rm -rf _build/;
+  /usr/bin/rebar3 upgrade;
+  /usr/bin/rebar3 release;
   ;;
 test)
   echo "==> test phase script"
+  echo "=====> testing "
+  /usr/bin/rebar3 eunit
   ;;
 package)
   echo "==> package phase script"
