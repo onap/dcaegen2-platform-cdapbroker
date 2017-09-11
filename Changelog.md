@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/) 
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [4.0.6] - Sep 11 2017
+* Get meck working for better unit tests
+* More unit tests
+* Removal of some "integration tests" that are now covered by unit tests
+* Small cleanups.
+
+## [4.0.5] - Missing =(
+
 ## [4.0.4] - Aug 29 2017
 * Cleanup cdap undeploy code and fix misleading log statements
 * Attempt to add ONAP build artifacts

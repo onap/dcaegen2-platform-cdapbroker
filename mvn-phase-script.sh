@@ -205,7 +205,8 @@ compile)
   ;;
 test)
   echo "==> test phase script"
-  /usr/bin/rebar3 eunit
+  /usr/bin/rebar3 eunit --cover;
+  /usr/bin/rebar3 cover;
   ;;
 package)
   echo "==> package phase script"

@@ -7,6 +7,8 @@
 -export([get/3, put/3, delete/3, post/3]).
 -export([cross_domains/3]).
 
+-export([appname_to_field_vals/2]).
+
 %%for keeping state
 %%The application record is defined in application.hrl
 %%In Mnesia, the first element is the type of record and the second element is the key
@@ -163,7 +165,174 @@ delete_app_helper(Appname, State, XER, Req) ->
             end
     end.
 
-%%%CALLBACKS %%%
+parse_put_body(B) ->
+    %parse the PUT body to application
+    try
+        Body = jiffy:decode(B, [return_maps]),
+        Type = maps:get(<<"cdap_application_type">>, Body),
+        case Type ==  <<"hydrator-pipeline">> orelse Type == <<"program-flowlet">> of
+            false -> unsupported;
+            true ->
+                %common to both
+                Namespace = maps:get(<<"namespace">>, Body),
+                Streamname = maps:get(<<"streamname">>, Body),
+                case Type of
+                    <<"program-flowlet">> ->
+                        JarURL = maps:get(<<"jar_url">>, Body),
+                        ArtifactName = maps:get(<<"artifact_name">>, Body),
+                        ArtifactVersion = maps:get(<<"artifact_version">>, Body),
+                        AppConfig = maps:get(<<"app_config">>, Body),
+                        AppPreferences = maps:get(<<"app_preferences">>, Body),
+                        ParsedServices = lists:map(fun(S) -> {maps:get(<<"service_name">>, S),
+                                                              maps:get(<<"service_endpoint">>, S),
+                                                              maps:get(<<"endpoint_method">>, S)}
+                                                   end, maps:get(<<"services">>, Body)),
+                        Programs = lists:map(fun(P) -> #program{type=maps:get(<<"program_type">>, P),
+                                                                id= maps:get(<<"program_id">>, P)}
+                                                   end, maps:get(<<"programs">>, Body)),
+                        ParsedProgramPreferences = lists:map(fun(P) -> {maps:get(<<"program_type">>, P),
+                                                                        maps:get(<<"program_id">>, P),
+                                                                        maps:get(<<"program_pref">>, P)}
+                                                             end, maps:get(<<"program_preferences">>, Body)),
+                       {<<"program-flowlet">>, {Namespace, Streamname, JarURL, ArtifactName, ArtifactVersion, AppConfig, AppPreferences, ParsedServices, Programs, ParsedProgramPreferences}};
+                    <<"hydrator-pipeline">> ->
+                        PipelineConfigJsonURL = maps:get(<<"pipeline_config_json_url">>, Body),
+
+                        %Dependencies is optional. This function will normalize it's return with [] if the dependencies key was not passed in.
+                        ParsedDependencies = case maps:is_key(<<"dependencies">>, Body) of
+                            true ->
+                                D = maps:get(<<"dependencies">>, Body),
+                                %crash and let caller deal with it if not a list or if required keys are missing. Else parse it into
+                                %     {artifact-extends-header, artifact_name, artifact-version-header, artifact_url}
+                                %regarding the binart_to_lists: these all come in as binaries but they need to be "strings" (which are just lists of integers in erlang)
+                                %for headers requiring strings, see http://stackoverflow.com/questions/28292576/setting-headers-in-a-httpc-post-request-in-erlang
+                                lists:map(fun(X) -> {binary_to_list(maps:get(<<"artifact_extends_header">>, X)),
+                                                     maps:get(<<"artifact_name">>, X),
+                                                     binary_to_list(maps:get(<<"artifact_version_header">>, X)),
+                                                     maps:get(<<"artifact_url">>, X),
+                                                     %even if dependencies is specified, ui_properties is optional. This will normalize it's return with 'none' if  not passed in
+                                                     case maps:is_key(<<"ui_properties_url">>, X) of true -> maps:get(<<"ui_properties_url">>, X); false -> none end
+                                                    } end, D);
+                            false -> [] %normalize optional user input into []; just prevents user from having to explicitly pass in []
+                        end,
+                        {<<"hydrator-pipeline">>, {Namespace, Streamname, PipelineConfigJsonURL, ParsedDependencies}}
+                end
+            end
+    catch _:_ ->  invalid
+    end.
+
+parse_reconfiguration_put_body(Body) ->
+    try
+        D = jiffy:decode(Body, [return_maps]),
+        ReconfigurationType = maps:get(<<"reconfiguration_type">>, D),
+        Config = maps:get(<<"config">>, D),
+        case ReconfigurationType == <<"program-flowlet-app-config">> orelse
+             ReconfigurationType == <<"program-flowlet-app-preferences">> orelse
+             ReconfigurationType == <<"program-flowlet-smart">> of
+             false -> notimplemented;
+             true -> {ReconfigurationType, Config}
+        end
+    catch _:_ ->  invalid
+    end.
+
+handle_reconfigure_put(Req, State, XER, Appname, ReqBody) ->
+    %handle the reconfiguration put. broker out from the http call, and takes the lookup func as an arg, to allow for better unit testing.
+    %this is still not a pure function due to the workflows call, still needs enhancement
+    case ?MODULE:appname_to_field_vals(Appname, [<<"namespace">>]) of
+        none ->  {404, "Reconfigure recieved but the app is not registered", State};
+        [Namespace] ->
+            ParsedBody = parse_reconfiguration_put_body(ReqBody),
+            case ParsedBody of
+                invalid ->  {400, "Invalid PUT Reconfigure Body", State};
+                notimplemented -> {501, "This type of reconfiguration is not implemented", State};
+                {ReconfigurationType, Config} ->
+                    try
+                        ok = case ReconfigurationType of
+                            <<"program-flowlet-app-config">> ->
+                                %reconfigure a program-flowlet style app's app config
+                                workflows:app_config_reconfigure(Req, XER, Appname, Namespace, ?CONSURL, ?CDAPURL, Config);
+                            <<"program-flowlet-app-preferences">> ->
+                                %reconfigure a program-flowlet style app's app config
+                                workflows:app_preferences_reconfigure(Req, XER, Appname, Namespace, ?CONSURL, ?CDAPURL, Config);
+                           <<"program-flowlet-smart">> ->
+                                %try to "figure out" whether the supplied JSON contains keys in appconfig, app preferences, or both
+                                workflows:smart_reconfigure(Req, XER, Appname, Namespace, ?CONSURL, ?CDAPURL, Config)
+                        end,
+                        {200, "", State}
+                    catch
+                        %catch a bad HTTP error code; also catches the non-overlapping configuration case
+                        error:{badmatch, {BadErrorCode, BadStatusMsg}} ->
+                            err(error, [{xer, XER}, {msg, io_lib:format("~p ~s", [BadErrorCode, BadStatusMsg])}]),
+                            {BadErrorCode, BadStatusMsg, State};
+                        Class:Reason ->
+                            err(error, [{xer,XER},  {msg, io_lib:format("~nError Stacktrace:~s", [lager:pr_stacktrace(erlang:get_stacktrace(), {Class, Reason})])}]),
+                            {500, "", State}
+                    end
+            end
+    end.
+
+handle_put(Req, State, XER, Appname, ReqBody, RequestUrl) ->
+    %use of ?MODULE here is due to the meck limitation described here: https://github.com/eproxus/meck
+    case ?MODULE:appname_to_field_vals(Appname, [<<"appname">>]) == none  of
+        false -> {400, "Put recieved on /application/:appname but appname is already registered. Call /application/:appname/reconfigure if trying to reconfigure or delete first", State};
+        true ->
+            %Initial put requires the put body parameters
+            ParsedBody = parse_put_body(ReqBody),
+            case ParsedBody of
+                invalid -> {400, "Invalid PUT Body or unparseable URL", State};   %could not parse the body
+                unsupported -> {400, "Unsupported CDAP Application Type", State}; %unsupported cdap application type
+                {AppType, Params} ->
+                    %form shared info
+                    Metricsurl = <<RequestUrl/binary, <<"/metrics">>/binary>>,
+                    Healthcheckurl = <<RequestUrl/binary, <<"/healthcheck">>/binary>>,
+
+                    try
+                       case AppType of
+                           <<"hydrator-pipeline">> ->
+                               {Namespace, Streamname, PipelineConfigJsonURL, ParsedDependencies} = Params,
+                               ConnectionURL = cdap_interface:form_stream_url_from_streamname(?CDAPURL, Namespace, Streamname),
+                               ServiceEndpoints = [], %TODO: unclear if this is possible with pipelines
+
+                               %write into mnesia, deploy
+                               A = #application{appname = Appname, apptype = AppType, namespace = Namespace, healthcheckurl = Healthcheckurl, metricsurl = Metricsurl, url = RequestUrl, connectionurl = ConnectionURL, serviceendpoints = ServiceEndpoints, creationtime=erlang:system_time()},
+                               {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(A) end),
+                               ok = workflows:deploy_hydrator_pipeline(Req, XER, Appname, Namespace, ?CDAPURL, PipelineConfigJsonURL, ParsedDependencies, ?CONSURL, RequestUrl, Healthcheckurl, ?HCInterval, ?AutoDeregisterAfter),
+                               metrics(info, Req, [{bts, iso()}, {xer, XER}, {mod, mod()}, {msg, io_lib:format("New Hydrator Application Created: ~p", [lager:pr(A, ?MODULE)])}]), %see Record Pretty Printing: https://github.com/basho/lager
+                               ok;
+                           <<"program-flowlet">> ->
+                               {Namespace, Streamname, JarURL, ArtifactName, ArtifactVersion, AppConfig, AppPreferences, ParsedServices, Programs, ParsedProgramPreferences} = Params,
+                               %Form URLs that are part of the record
+                               %NOTE: These are both String concatenation functions and neither make an HTTP call so not catching normal {Code, Status} return here
+                               ConnectionURL = cdap_interface:form_stream_url_from_streamname(?CDAPURL, Namespace, Streamname),
+                               ServiceEndpoints = lists:map(fun(X) -> cdap_interface:form_service_json_from_service_tuple(Appname, Namespace, ?CDAPURL, X) end, ParsedServices),
+
+                               %write into mnesia. deploy
+                               A = #application{appname = Appname, apptype = AppType, namespace = Namespace, healthcheckurl = Healthcheckurl, metricsurl = Metricsurl, url = RequestUrl, connectionurl = ConnectionURL, serviceendpoints = ServiceEndpoints, creationtime=erlang:system_time()},
+                               ASupplemental = #prog_flow_supp{appname = Appname, programs = Programs},
+                               {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(A) end),             %warning, here be mnesia magic that knows what table you want to write to based on the record type
+                               {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(ASupplemental) end), %warning: ""
+                               ok = workflows:deploy_cdap_app(Req, XER, Appname, ?CONSURL, ?CDAPURL, ?HCInterval, ?AutoDeregisterAfter, AppConfig, JarURL, ArtifactName, ArtifactVersion, Namespace, AppPreferences, ParsedProgramPreferences, Programs, RequestUrl, Healthcheckurl),
+                               metrics(info, Req, [{bts, iso()}, {xer, XER}, {mod, mod()}, {msg, io_lib:format("New Program-Flowlet Application Created: ~p with supplemental data: ~p", [lager:pr(A, ?MODULE), lager:pr(ASupplemental, ?MODULE)])}]),
+                               ok
+                       end,
+                       appname_to_application_http(XER, Appname, State)
+
+                    catch
+                        %catch a bad HTTP error code
+                        error:{badmatch, {BadErrorCode, BadStatusMsg}} ->
+                            err(error, [{xer, XER}, {msg, io_lib:format("Badmatch caught in Deploy. Rolling Back. ~p ~s", [BadErrorCode, BadStatusMsg])}]),
+                            {_,_,_} = delete_app_helper(Appname, State, XER, Req),
+                            {BadErrorCode, BadStatusMsg, State}; %pass the bad error/status back to user
+                        Class:Reason ->
+                            %generic failure catch-all, catastrophic
+                            err(error, [{xer, XER}, {msg, io_lib:format("~nUnexpected Exception caught in Deploy. Error Stacktrace:~s", [lager:pr_stacktrace(erlang:get_stacktrace(), {Class, Reason})])}]),
+                            {_,_,_} = delete_app_helper(Appname, State, XER, Req),
+                            {500, "Please report this error", State}
+                    end
+            end
+    end.
+
+%%% HTTP API CALLBACKS %%%
 init(_Route, _Req, State) ->
      {ok, State}.
 terminate(_Reason, _Route, _Req, _State) ->
@@ -234,7 +403,6 @@ get("/application/:appname/healthcheck", Req, State) ->
     end,
     ?AUDI(Req, Bts, XER, Rcode),
     {RCode, RBody, RState}.
-
 %%%DELETE Methods
 delete("/application/:appname", Req, State) ->
     %Uninstall and delete a CDAP app
@@ -243,184 +411,14 @@ delete("/application/:appname", Req, State) ->
     {RCode, RBody, RState} = delete_app_helper(Appname, State, XER, Req),
     ?AUDI(Req, Bts, XER, Rcode),
     {RCode, RBody, RState}.
-
 %%%PUT Methods
-parse_put_body(B) ->
-    %parse the PUT body to application
-    try
-        Body = jiffy:decode(B, [return_maps]),
-        Type = maps:get(<<"cdap_application_type">>, Body),
-        case Type ==  <<"hydrator-pipeline">> orelse Type == <<"program-flowlet">> of
-            false -> unsupported;
-            true ->
-                %common to both
-                Namespace = maps:get(<<"namespace">>, Body),
-                Streamname = maps:get(<<"streamname">>, Body),
-                case Type of
-                    <<"program-flowlet">> ->
-                        JarURL = maps:get(<<"jar_url">>, Body),
-                        ArtifactName = maps:get(<<"artifact_name">>, Body),
-                        ArtifactVersion = maps:get(<<"artifact_version">>, Body),
-                        AppConfig = maps:get(<<"app_config">>, Body),
-                        AppPreferences = maps:get(<<"app_preferences">>, Body),
-                        ParsedServices = lists:map(fun(S) -> {maps:get(<<"service_name">>, S),
-                                                              maps:get(<<"service_endpoint">>, S),
-                                                              maps:get(<<"endpoint_method">>, S)}
-                                                   end, maps:get(<<"services">>, Body)),
-                        Programs = lists:map(fun(P) -> #program{type=maps:get(<<"program_type">>, P),
-                                                                id= maps:get(<<"program_id">>, P)}
-                                                   end, maps:get(<<"programs">>, Body)),
-                        ParsedProgramPreferences = lists:map(fun(P) -> {maps:get(<<"program_type">>, P),
-                                                                        maps:get(<<"program_id">>, P),
-                                                                        maps:get(<<"program_pref">>, P)}
-                                                             end, maps:get(<<"program_preferences">>, Body)),
-                        {pf, <<"program-flowlet">>, {Namespace, Streamname, JarURL, ArtifactName, ArtifactVersion, AppConfig, AppPreferences, ParsedServices, Programs, ParsedProgramPreferences}};
-                    <<"hydrator-pipeline">> ->
-                        PipelineConfigJsonURL = maps:get(<<"pipeline_config_json_url">>, Body),
-
-                        %Dependencies is optional. This function will normalize it's return with [] if the dependencies key was not passed in.
-                        ParsedDependencies = case maps:is_key(<<"dependencies">>, Body) of
-                            true ->
-                                D = maps:get(<<"dependencies">>, Body),
-                                %crash and let caller deal with it if not a list or if required keys are missing. Else parse it into
-                                %     {artifact-extends-header, artifact_name, artifact-version-header, artifact_url}
-                                %regarding the binart_to_lists: these all come in as binaries but they need to be "strings" (which are just lists of integers in erlang)
-                                %for headers requiring strings, see http://stackoverflow.com/questions/28292576/setting-headers-in-a-httpc-post-request-in-erlang
-                                lists:map(fun(X) -> {binary_to_list(maps:get(<<"artifact_extends_header">>, X)),
-                                                     maps:get(<<"artifact_name">>, X),
-                                                     binary_to_list(maps:get(<<"artifact_version_header">>, X)),
-                                                     maps:get(<<"artifact_url">>, X),
-                                                     %even if dependencies is specified, ui_properties is optional. This will normalize it's return with 'none' if  not passed in
-                                                     case maps:is_key(<<"ui_properties_url">>, X) of true -> maps:get(<<"ui_properties_url">>, X); false -> none end
-                                                    } end, D);
-                            false -> [] %normalize optional user input into []; just prevents user from having to explicitly pass in []
-                        end,
-                        {hp, <<"hydrator-pipeline">>, {Namespace, Streamname, PipelineConfigJsonURL, ParsedDependencies}}
-                end
-            end
-    catch _:_ ->  invalid
-    end.
-
-parse_reconfiguration_put_body(Body) ->
-    try
-        D = jiffy:decode(Body, [return_maps]),
-        ReconfigurationType = maps:get(<<"reconfiguration_type">>, D),
-        Config = maps:get(<<"config">>, D),
-        case ReconfigurationType == <<"program-flowlet-app-config">> orelse
-             ReconfigurationType == <<"program-flowlet-app-preferences">> orelse
-             ReconfigurationType == <<"program-flowlet-smart">> of
-             false -> notimplemented;
-             true -> {ReconfigurationType, Config}
-        end
-    catch _:_ ->  invalid
-    end.
-
-handle_reconfigure_put(Req, State, XER, Appname, ReqBody, AppnameToNS) ->
-    %handle the reconfiguration put. broker out from the http call, and takes the lookup func as an arg, to allow for better unit testing.
-    %this is still not a pure function due to the workflows call, still needs enhancement
-    case AppnameToNS(Appname) of
-        none ->  {404, "Reconfigure recieved but the app is not registered", State};
-        Namespace ->
-            ParsedBody = parse_reconfiguration_put_body(ReqBody),
-            case ParsedBody of
-                invalid ->  {400, "Invalid PUT Reconfigure Body", State};
-                notimplemented -> {501, "This type of reconfiguration is not implemented", State};
-                {ReconfigurationType, Config} ->
-                    try
-                        ok = case ReconfigurationType of
-                            <<"program-flowlet-app-config">> ->
-                                %reconfigure a program-flowlet style app's app config
-                                workflows:app_config_reconfigure(Req, XER, Appname, Namespace, ?CONSURL, ?CDAPURL, Config);
-                            <<"program-flowlet-app-preferences">> ->
-                                %reconfigure a program-flowlet style app's app config
-                                workflows:app_preferences_reconfigure(Req, XER, Appname, Namespace, ?CONSURL, ?CDAPURL, Config);
-                           <<"program-flowlet-smart">> ->
-                                %try to "figure out" whether the supplied JSON contains keys in appconfig, app preferences, or both
-                                workflows:smart_reconfigure(Req, XER, Appname, Namespace, ?CONSURL, ?CDAPURL, Config)
-                        end,
-                        {200, "", State}
-                    catch
-                        %catch a bad HTTP error code; also catches the non-overlapping configuration case
-                        error:{badmatch, {BadErrorCode, BadStatusMsg}} ->
-                            err(error, [{xer, XER}, {msg, io_lib:format("~p ~s", [BadErrorCode, BadStatusMsg])}]),
-                            {BadErrorCode, BadStatusMsg, State};
-                        Class:Reason ->
-                            err(error, [{xer,XER},  {msg, io_lib:format("~nError Stacktrace:~s", [lager:pr_stacktrace(erlang:get_stacktrace(), {Class, Reason})])}]),
-                            {500, "", State}
-                    end
-            end
-    end.
-
 put("/application/:appname", Req, State) ->
     %create a new registration; deploys and starts a cdap application
     {Bts, XER} = init_api_call(Req),
     Appname = leptus_req:param(Req, appname),
-    {RCode, RBody, RState} = case appname_to_field_vals(Appname, [<<"appname">>]) of
-        [Appname] ->
-            {400, "Put recieved on /application/:appname but appname is already registered. Call /application/:appname/reconfigure if trying to reconfigure or delete first", State};
-        none -> %no matches, create the resource, return the application record
-            %Initial put requires the put body parameters
-            case parse_put_body(leptus_req:body_raw(Req)) of
-                %could not parse the body
-                invalid -> {400, "Invalid PUT Body or unparseable URL", State};
-
-                %unsupported cdap application type
-                unsupported -> {404, "Unsupported CDAP Application Type", State};
-
-                {Type, AppType, Params} ->
-                    %form shared info
-                    %hateaos cuz they aintaos
-                    {RequestUrl,_} = cowboy_req:url((leptus_req:get_req(Req))),
-                    Metricsurl = <<RequestUrl/binary, <<"/metrics">>/binary>>,
-                    Healthcheckurl = <<RequestUrl/binary, <<"/healthcheck">>/binary>>,
-
-                    try
-                       case Type of
-                           hp ->
-                               {Namespace, Streamname, PipelineConfigJsonURL, ParsedDependencies} = Params,
-                               ConnectionURL = cdap_interface:form_stream_url_from_streamname(?CDAPURL, Namespace, Streamname),
-
-                               %TODO: This!
-                               ServiceEndpoints = [], %unclear if this is possible with pipelines
-
-                               %write into mnesia, deploy
-                               A = #application{appname = Appname, apptype = AppType, namespace = Namespace, healthcheckurl = Healthcheckurl, metricsurl = Metricsurl, url = RequestUrl, connectionurl = ConnectionURL, serviceendpoints = ServiceEndpoints, creationtime=erlang:system_time()},
-                               {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(A) end),
-                               ok = workflows:deploy_hydrator_pipeline(Req, XER, Appname, Namespace, ?CDAPURL, PipelineConfigJsonURL, ParsedDependencies, ?CONSURL, RequestUrl, Healthcheckurl, ?HCInterval, ?AutoDeregisterAfter),
-                               metrics(info, Req, [{bts, iso()}, {xer, XER}, {mod, mod()}, {msg, io_lib:format("New Hydrator Application Created: ~p", [lager:pr(A, ?MODULE)])}]), %see Record Pretty Printing: https://github.com/basho/lager
-                               ok;
-                           pf ->
-                               {Namespace, Streamname, JarURL, ArtifactName, ArtifactVersion, AppConfig, AppPreferences, ParsedServices, Programs, ParsedProgramPreferences} = Params,
-                               %Form URLs that are part of the record
-                               %NOTE: These are both String concatenation functions and neither make an HTTP call so not catching normal {Code, Status} return here
-                               ConnectionURL = cdap_interface:form_stream_url_from_streamname(?CDAPURL, Namespace, Streamname),
-                               ServiceEndpoints = lists:map(fun(X) -> cdap_interface:form_service_json_from_service_tuple(Appname, Namespace, ?CDAPURL, X) end, ParsedServices),
-
-                               %write into mnesia. deploy
-                               A = #application{appname = Appname, apptype = AppType, namespace = Namespace, healthcheckurl = Healthcheckurl, metricsurl = Metricsurl, url = RequestUrl, connectionurl = ConnectionURL, serviceendpoints = ServiceEndpoints, creationtime=erlang:system_time()},
-                               ASupplemental = #prog_flow_supp{appname = Appname, programs = Programs},
-                               {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(A) end),             %warning, here be mnesia magic that knows what table you want to write to based on the record type
-                               {atomic,ok} = mnesia:transaction(fun() -> mnesia:write(ASupplemental) end), %warning: ""
-                               ok = workflows:deploy_cdap_app(Req, XER, Appname, ?CONSURL, ?CDAPURL, ?HCInterval, ?AutoDeregisterAfter, AppConfig, JarURL, ArtifactName, ArtifactVersion, Namespace, AppPreferences, ParsedProgramPreferences, Programs, RequestUrl, Healthcheckurl),
-                               metrics(info, Req, [{bts, iso()}, {xer, XER}, {mod, mod()}, {msg, io_lib:format("New Program-Flowlet Application Created: ~p with supplemental data: ~p", [lager:pr(A, ?MODULE), lager:pr(ASupplemental, ?MODULE)])}]),
-                               ok
-                       end,
-                       appname_to_application_http(XER, Appname, State)
-
-                    catch
-                        %catch a bad HTTP error code
-                        error:{badmatch, {BadErrorCode, BadStatusMsg}} ->
-                            err(error, [{xer, XER}, {msg, io_lib:format("Badmatch caught in Deploy. Rolling Back. ~p ~s", [BadErrorCode, BadStatusMsg])}]),
-                            {_,_,_} = delete_app_helper(Appname, State, XER, Req),
-                            {BadErrorCode, BadStatusMsg, State}; %pass the bad error/status back to user
-                        Class:Reason ->
-                            %generic failure catch-all, catastrophic
-                            err(error, [{xer, XER}, {msg, io_lib:format("~nUnexpected Exception caught in Deploy. Error Stacktrace:~s", [lager:pr_stacktrace(erlang:get_stacktrace(), {Class, Reason})])}]),
-                            {_,_,_} = delete_app_helper(Appname, State, XER, Req),
-                            {500, "Please report this error", State}
-                    end
-            end
-        end,
+    ReqBody = leptus_req:body_raw(Req),
+    {RequestUrl,_} = cowboy_req:url((leptus_req:get_req(Req))),
+    {RCode, RBody, RState} = handle_put(Req, State, XER, Appname, ReqBody, RequestUrl),
     ?AUDI(Req, Bts, XER, Rcode),
     {RCode, RBody, RState};
 put("/application/:appname/reconfigure", Req, State) ->
@@ -428,14 +426,7 @@ put("/application/:appname/reconfigure", Req, State) ->
     {Bts, XER} = init_api_call(Req),
     Appname = leptus_req:param(Req, appname),
     ReqBody = leptus_req:body_raw(Req),
-    AppnameToNS = fun(App) ->
-                                 X = appname_to_field_vals(App, [<<"namespace">>]),
-                                 case X of
-                                     none -> X;
-                                     [Namespace] -> Namespace
-                                end
-                         end,
-    {RCode, RBody, RState} = handle_reconfigure_put(Req, State, XER, Appname, ReqBody, AppnameToNS),
+    {RCode, RBody, RState} = handle_reconfigure_put(Req, State, XER, Appname, ReqBody),
     ?AUDI(Req, Bts, XER, Rcode),
     {RCode, RBody, RState}.
 

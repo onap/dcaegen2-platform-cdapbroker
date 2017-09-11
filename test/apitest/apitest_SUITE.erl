@@ -506,7 +506,7 @@ hydrator_wdeps_deploy(C) ->
 hydrator_test(C) ->
     %test te app by injecting some data into the stream and getting it out
         %Sleeping since HTTP services may still be booting up: see https://issues.cask.co/browse/CDAP-812
-    ok = timer:sleep(30000), %30s
+    ok = timer:sleep(60000), %60s
     %curl into stream
     {200, _} = httpabs:post(?XER, ?PLG(hydrator_stream_url, C), "text/plain", "beer, vodka, gin"),
     %query data out
@@ -526,7 +526,7 @@ hydrator_test(C) ->
 
 app_test(C) ->
     %Sleeping since HTTP services may still be booting up: see https://issues.cask.co/browse/CDAP-812
-    ok = timer:sleep(30000), %30s
+    ok = timer:sleep(60000), %60s
     {200, _} = httpabs:post(?XER, ?PLG(stream_url, C), "text/plain", "'Prince of Darkness'"),
     {200, "Hello 'Prince of Darkness'!"} = httpabs:get(?XER,?SC([?PLG(app_url, C), "/services/Greeting/methods/greet"])).
 
@@ -537,8 +537,6 @@ app_reconfigure(C) ->
 
     %do the reconfig
     ReconfigMap = util:ejson_to_map({[{<<"foo REDUX EDITION">>, <<"bar">>}, {<<"LEAVE ME ALONE">>, <<"CONFIG EDITION">>}]}),
-    %test httpabs bad body (not encoded as JSON)
-    {400,"ERROR: The request Body is malformed"} = httpabs:put(?XER, ?SC([?PLG(broker_app_url, C), "/reconfigure"]), "application/json", {[{<<"reconfiguration_type">>, <<"program-flowlet-app-config">>}, {<<"config">>, ReconfigMap}]}),
     %do it properly
     {200, _} = httpabs:put(?XER, ?SC([?PLG(broker_app_url, C), "/reconfigure"]), "application/json", jiffy:encode({[{<<"reconfiguration_type">>, <<"program-flowlet-app-config">>},{<<"config">>, ReconfigMap}]})),
     %test new config right in consul
@@ -723,10 +721,6 @@ test_failures(C) ->
 
     %malformed Broker put
     URL = ?SC([?PLG(broker_app_url, C), "FAILURETEST"]),
-    Body = {[
-              {<<"malformed">>, <<"i am">>}
-            ]},
-    {400, "State: Bad Request. Return Body: Invalid PUT Body or unparseable URL"} = httpabs:put(?XER, URL, "application/json", jiffy:encode(Body)),
 
     %deploy a bad CDAP app with a bad program_id
     Body2 = {[
@@ -768,24 +762,7 @@ test_failures(C) ->
          {<<"programs">>,  [{[{<<"program_type">>, <<"flows">>},{<<"program_id">>, <<"WhoFlow">>}]},{[{<<"program_type">>, <<"services">>},{<<"program_id">>, <<"Greeting">>}]}]},
          {<<"program_preferences">>, [{[{<<"program_type">>,<<"flows">>}, {<<"program_id">>, <<"WhoFlow">>}, {<<"program_pref">>, ?PLG(whoflowpref, C)}]}]}
          ]},
-    {404, _} = httpabs:put(?XER, URL, "application/json", jiffy:encode(Body3)),
-
-    %try to deploy with a bad URL where bad means malformed
-    Body4 = {[
-         {<<"cdap_application_type">>, <<"program-flowlet">>},
-         {<<"namespace">>, ?PLG(namespace, C)},
-         {<<"streamname">>, ?PLG(streamname, C)},
-         {<<"jar_url">>, <<"THIS IS NOT EVEN A URL WHAT ARE YOU DOING TO ME">>},
-         {<<"artifact_name">>,  ?PLG(art_name, C)},
-         {<<"artifact_version">>, ?PLG(art_ver, C)},
-         {<<"app_config">>,  ?PLG(init_config, C)},
-         {<<"app_preferences">>, ?PLG(init_preferences, C)},
-         {<<"services">>, [{[{<<"service_name">>, <<"Greeting">>},  {<<"service_endpoint">>, <<"greet">>}, {<<"endpoint_method">>, <<"GET">>}]}]},
-         {<<"programs">>,  [{[{<<"program_type">>, <<"flows">>},{<<"program_id">>, <<"WhoFlow">>}]},{[{<<"program_type">>, <<"services">>},{<<"program_id">>, <<"Greeting">>}]}]},
-         {<<"program_preferences">>, [{[{<<"program_type">>,<<"flows">>}, {<<"program_id">>, <<"WhoFlow">>}, {<<"program_pref">>, ?PLG(whoflowpref, C)}]}]}
-         ]},
-         {400,"State: Bad Request. Return Body: ERROR: The following URL is malformed: THIS IS NOT EVEN A URL WHAT ARE YOU DOING TO ME"} = httpabs:put(?XER, URL, "application/json", jiffy:encode(Body4))
-    .
+    {404, _} = httpabs:put(?XER, URL, "application/json", jiffy:encode(Body3)).
 
 delete_all(C) ->
     %test invalid key

@@ -24,7 +24,8 @@
 -import(resource_handler, [
                             parse_put_body/1,
                             parse_reconfiguration_put_body/1,
-                            handle_reconfigure_put/6
+                            handle_reconfigure_put/5,
+                            handle_put/6
                           ]).
 
 parse_put_body_test() ->
@@ -58,7 +59,7 @@ parse_put_body_test() ->
                 [{<<"Greeting">>,<<"greet">>,<<"GET">>}],
                 [#program{type = <<"flows">>, id = <<"WhoFlow">>}, #program{type = <<"services">>, id = <<"Greeting">>}],
                 [{<<"flows">>,<<"WhoFlow">>,#{<<"foopprog">>=><<"barpprog">>}}]},
-    Expected = {pf, <<"program-flowlet">>, ExpectedL},
+    Expected = {<<"program-flowlet">>, ExpectedL},
     ?assert(parse_put_body(jiffy:encode(Valid)) == Expected),
 
     ValidHydrator1 =
@@ -68,7 +69,7 @@ parse_put_body_test() ->
               {<<"streamname">>, <<"sn">>},
               {<<"pipeline_config_json_url">>, "www.foo.com"}
             ]},
-    ExpectedHy1 = {hp,<<"hydrator-pipeline">>,{<<"ns">>,<<"sn">>,"www.foo.com",[]}},
+    ExpectedHy1 = {<<"hydrator-pipeline">>, {<<"ns">>,<<"sn">>,"www.foo.com",[]}},
     ?assert(parse_put_body(jiffy:encode(ValidHydrator1)) == ExpectedHy1),
 
     ValidHydrator2 =
@@ -88,42 +89,65 @@ parse_put_body_test() ->
                                    ]}
             ]},
     %{hp, <<"hydrator-pipeline">>, {Namespace, Streamname, PipelineConfigJsonURL, ParsedDependencies}}
-    ExpectedHy2 = {hp,<<"hydrator-pipeline">>,{<<"ns">>,<<"sn">>,"www.foo.com",[{"system:cdap-data-pipeline[4.1.0,5.0.0)",<<"art carney">>,"1.0.0-SNAPSHOT",<<"www.foo.com/sup/baphomet.jar">>,<<"www.foo2.com/sup/baphomet.jar">>}]}},
+    ExpectedHy2 = {<<"hydrator-pipeline">>, {<<"ns">>,<<"sn">>,"www.foo.com",[{"system:cdap-data-pipeline[4.1.0,5.0.0)",<<"art carney">>,"1.0.0-SNAPSHOT",<<"www.foo.com/sup/baphomet.jar">>,<<"www.foo2.com/sup/baphomet.jar">>}]}},
     ?assert(parse_put_body(jiffy:encode(ValidHydrator2)) == ExpectedHy2),
 
-    InvalidType = {[{<<"cdap_application_type">>, <<"NOT TODAY">>}]},
-    erlang:display(parse_put_body(jiffy:encode(InvalidType))),
-    ?assert(parse_put_body(jiffy:encode(InvalidType)) == unsupported),
+    %Test the unexpected cases
+    EmptyD = dict:new(),
+    try meck:new(resource_handler, [passthrough]) catch _:_ -> ok end,
+    meck:expect(resource_handler, appname_to_field_vals, fun(X, [<<"appname">>]) ->
+                                                            case X of
+                                                                <<"notexist">> -> none;
+                                                                <<"exist">> -> [<<"exist">>]
+                                                            end
+                                                         end),
+
+
+    %check already exists
+    ?assert(handle_put("", EmptyD, "textxer", <<"exist">>, Valid, "www.validurl.com") == {400, "Put recieved on /application/:appname but appname is already registered. Call /application/:appname/reconfigure if trying to reconfigure or delete first", EmptyD}),
+
+    InvalidType = jiffy:encode({[{<<"cdap_application_type">>, <<"NOT TODAY">>}]}),
+    ?assert(parse_put_body(InvalidType) == unsupported),
+    ?assert(handle_put("", EmptyD, "textxer", <<"notexist">>, InvalidType, "www.validurl.com") == {400,"Unsupported CDAP Application Type", EmptyD}),
 
     InvalidMissing = {[
          {<<"cdap_application_type">>, <<"program-flowlet">>},
          {<<"namespace">>,         <<"ns">>}
          ]},
-    ?assert(parse_put_body(jiffy:encode(InvalidMissing)) == invalid).
+    ?assert(parse_put_body(jiffy:encode(InvalidMissing)) == invalid),
+    ?assert(handle_put("", EmptyD, "textxer", <<"notexist">>, InvalidMissing, "www.validurl.com") == {400, "Invalid PUT Body or unparseable URL", EmptyD}),
+
+    InvalidMissing2 = {[{<<"malformed">>, <<"i am">>}]},
+    ?assert(parse_put_body(jiffy:encode(InvalidMissing2)) == invalid),
+    ?assert(handle_put("", EmptyD, "textxer", <<"notexist">>, InvalidMissing2, "www.validurl.com") == {400, "Invalid PUT Body or unparseable URL", EmptyD}),
+
+    meck:unload(resource_handler).
+
 
 reconfiguration_put_test() ->
     %test reconfiguring with an invalid PUT body (missing "reconfiguration_type")
-     AppnameToNS = fun(X) ->
-                             case X of
-                                <<"notexist">> -> none;
-                                <<"exist">> -> <<"ns">>
-                             end
-                          end,
     EmptyD = dict:new(),
+    try meck:new(resource_handler, [passthrough]) catch _:_ -> ok end,
+    meck:expect(resource_handler, appname_to_field_vals,  fun(X, _) ->
+                                                              case X of
+                                                                 <<"notexist">> -> none;
+                                                                 <<"exist">> -> [<<"ns">>]
+                                                              end
+                                                           end),
 
     I1 = jiffy:encode({[{<<"config">>, <<"bar">>}]}),
     ?assert(parse_reconfiguration_put_body(I1) == invalid),
-    ?assert(handle_reconfigure_put("", EmptyD, "testXER", <<"exist">>, I1, AppnameToNS) == {400,"Invalid PUT Reconfigure Body",EmptyD}),
+    ?assert(handle_reconfigure_put("", EmptyD, "testXER", <<"exist">>, I1) == {400,"Invalid PUT Reconfigure Body",EmptyD}),
 
     %test reconfiguring with an invalid PUT body (missing app_config)
     I2 = jiffy:encode({[{<<"reconfiguration_type">>, <<"program-flowlet-app-config">>}, {<<"foo">>, <<"bar">>}]}),
     ?assert(parse_reconfiguration_put_body(I2) == invalid),
-    ?assert(handle_reconfigure_put("", EmptyD, "testXER", <<"exist">>, I2, AppnameToNS) == {400,"Invalid PUT Reconfigure Body",EmptyD}),
+    ?assert(handle_reconfigure_put("", EmptyD, "testXER", <<"exist">>, I2) == {400,"Invalid PUT Reconfigure Body",EmptyD}),
 
     %test reconfiguring an invalid (unimplemented) type
     I3 = jiffy:encode({[{<<"config">>, <<"bar">>}, {<<"reconfiguration_type">>, <<"EMPTINESS">>}]}),
     ?assert(parse_reconfiguration_put_body(I3) == notimplemented),
-    ?assert(handle_reconfigure_put("", EmptyD, "testXER", <<"exist">>, I3, AppnameToNS) == {501,"This type of reconfiguration is not implemented",EmptyD}),
+    ?assert(handle_reconfigure_put("", EmptyD, "testXER", <<"exist">>, I3) == {501,"This type of reconfiguration is not implemented",EmptyD}),
 
     Valid = jiffy:encode({[{<<"config">>, {[{<<"foo">>, <<"bar">>}]}}, {<<"reconfiguration_type">>,<<"program-flowlet-app-config">>}]}),
     ?assert(parse_reconfiguration_put_body(Valid) == {<<"program-flowlet-app-config">>,#{<<"foo">>=><<"bar">>}}),
@@ -132,5 +156,8 @@ reconfiguration_put_test() ->
 
     %test for valid but missing
     %?assert(handle_reconfigure_put("", EmptyD, "testXER", <<"exist">>, I3, AppnameToNS) == {501,"This type of reconfiguration is not implemented",EmptyD}),
-    ?assert(handle_reconfigure_put("", EmptyD, "testXER", <<"notexist">>, Valid, AppnameToNS) == {404,"Reconfigure recieved but the app is not registered", EmptyD}).
+    ?assert(handle_reconfigure_put("", EmptyD, "testXER", <<"notexist">>, Valid) == {404,"Reconfigure recieved but the app is not registered", EmptyD}),
+
+    meck:unload(resource_handler).
+
 

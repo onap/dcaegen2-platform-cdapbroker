@@ -6,9 +6,9 @@
 % Licensed under the Apache License, Version 2.0 (the "License");
 % you may not use this file except in compliance with the License.
 % You may obtain a copy of the License at
-% 
+%
 %      http://www.apache.org/licenses/LICENSE-2.0
-% 
+%
 % Unless required by applicable law or agreed to in writing, software
 % distributed under the License is distributed on an "AS IS" BASIS,
 % WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,10 +21,16 @@
 -module(util_tests).
 -include_lib("eunit/include/eunit.hrl").
 -import(util, [
-               iso_elapsed/2, 
+               iso_elapsed/2,
                ip_to_str/1,
                update_with_new_config_map/2,
-               ejson_to_map/1]).
+               ejson_to_map/1,
+               to_str/1
+              ]).
+
+to_str_test() ->
+    ?assert(to_str("") == ""),
+    ?assert(to_str(<<"asdf">>) == "asdf").
 
 iso_elapsed_test() ->
     ?assert(iso_elapsed(<<"2017-04-27T18:38:10Z">>, <<"2017-04-27T18:38:08Z">>) == 2),
