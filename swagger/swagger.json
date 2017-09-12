@@ -1,7 +1,7 @@
 {
     "swagger": "2.0",
     "info": {
-        "version": "4.0.6",
+        "version": "4.0.7",
         "title": "CDAP Broker API"
     },
     "paths": {

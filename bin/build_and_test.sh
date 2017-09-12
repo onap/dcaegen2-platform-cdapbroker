@@ -1,5 +1,7 @@
 #!/usr/local/bin/fish
 rm -rf /tmp/log/cdapbroker/*;
+rm -rf _build/*
+rebar3 upgrade;
 rebar3 release; 
 set -x NEXUS_RAW_ROOT "XXXX";
 set -x CDAP_CLUSTER_TO_MANAGE "cdap";

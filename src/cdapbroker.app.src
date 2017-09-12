@@ -1,6 +1,6 @@
 {application, cdapbroker,
  [{description, "Interface between Consul and CDAP in DCAE"},
-  {vsn, "4.0.6"},
+  {vsn, "4.0.7"},
   {registered, []},
   {mod, { cdapbroker_app, []}},
   {applications,

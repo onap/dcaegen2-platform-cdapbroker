@@ -25,10 +25,11 @@
                             parse_put_body/1,
                             parse_reconfiguration_put_body/1,
                             handle_reconfigure_put/5,
-                            handle_put/6
+                            handle_put/6,
+                            handle_post_multidelete_app/4
                           ]).
 
-parse_put_body_test() ->
+put_test() ->
     Valid = {[
          {<<"cdap_application_type">>, <<"program-flowlet">>},
          {<<"namespace">>,         <<"ns">>},
@@ -160,4 +161,33 @@ reconfiguration_put_test() ->
 
     meck:unload(resource_handler).
 
+delete_test() ->
+    EmptyD = dict:new(),
 
+    %test failure: appnames missing
+    Invalid1 = jiffy:encode({[{<<"ids">>, [<<"hwtest">>]}]}),
+    ?assert(handle_post_multidelete_app(notused, EmptyD, notused, Invalid1) == {400,"Invalid PUT Body", EmptyD}),
+
+    %test invalid: not a list
+    Invalid2 = jiffy:encode({[{<<"appnames">>, <<"hwtest">>}]}),
+    ?assert(handle_post_multidelete_app(notused, EmptyD, notused, Invalid2) == {400,"Invalid PUT Body", EmptyD}),
+
+    %mock out delete_app_helper(X, State, XER, Req)
+    meck:new(resource_handler, [passthrough]),
+    meck:expect(resource_handler,
+                delete_app_helper,
+                fun(Appname, State, _XER, _Req) ->
+                   case Appname of
+                       <<"noexist">> -> {404, "Tried to delete an application that was not registered", State};
+                       <<"exist">>   -> {200, "", State}
+                   end
+                end),
+    %est empty
+    Empty = jiffy:encode({[{<<"appnames">>, []}]}),
+    ?assert(handle_post_multidelete_app(notused, EmptyD, notused, Empty) == {200, "EMPTY PUT BODY", EmptyD}),
+
+    %test one app that is registered (in the mock...) and one app that is not regustered
+    Valid = jiffy:encode({[{<<"appnames">>, [<<"exist">>, <<"noexist">>]}]}),
+    ?assert(handle_post_multidelete_app(notused, EmptyD, notused, Valid) == {200, <<"[200,404]">>, EmptyD}),
+
+    meck:unload(resource_handler).

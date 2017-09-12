@@ -7,8 +7,6 @@
 -export([get/3, put/3, delete/3, post/3]).
 -export([cross_domains/3]).
 
--export([appname_to_field_vals/2]).
-
 %%for keeping state
 %%The application record is defined in application.hrl
 %%In Mnesia, the first element is the type of record and the second element is the key
@@ -31,6 +29,8 @@
 %lazy shorthand to write info audit records. man I miss defines in python. c ftw.
 -define(AUDI(Req, Bts, XER, Rcode), audit(info, Req, [{bts, Bts}, {xer,XER}, {rcode, RCode}, {mod, mod()}])).
 
+%need this for the ?MODULE:FUNCTION to work with meck unit tests
+-export([delete_app_helper/4, appname_to_field_vals/2]).
 
 %%%
 %%Helper functions
@@ -332,7 +332,35 @@ handle_put(Req, State, XER, Appname, ReqBody, RequestUrl) ->
             end
     end.
 
+handle_post_multidelete_app(Req, State, XER, ReqBody) ->
+    %handler method for the multi delete post ala AWS
+    case
+        try
+             B = maps:get(<<"appnames">>, jiffy:decode(ReqBody, [return_maps])),
+             true = erlang:is_list(B),
+             B
+        catch _:_ ->
+            invalid
+        end
+        of
+        invalid -> {400, "Invalid PUT Body", State};
+        IDs ->
+            case IDs of
+                [] -> {200, "EMPTY PUT BODY", State};
+                _ ->
+                %<<"*">> ->
+                %this block deleted all apps, but decided this backdoor wasn't very RESTy
+                %%    {atomic, Apps} = mnesia:transaction(fun() -> mnesia:match_object(application, {application, '_', '_', '_', '_', '_', '_', '_', '_', '_'}, read) end),
+                %    AppsToDelete = lists:map(fun(X) -> {application, Appname, _,_,_,_,_,_,_,_} = X, Appname end, Apps),
+                    Returns = lists:map(fun(X) -> ?MODULE:delete_app_helper(X, State, XER, Req) end, IDs),
+                    RL = lists:map(fun({RC, _, _}) -> RC end, Returns),
+                    {200, jiffy:encode(RL), State}
+            end
+        end.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% HTTP API CALLBACKS %%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%
 init(_Route, _Req, State) ->
      {ok, State}.
 terminate(_Reason, _Route, _Req, _State) ->
@@ -340,8 +368,7 @@ terminate(_Reason, _Route, _Req, _State) ->
 %%%FOR Cors support
 %%%Note! only matches on host. Does not handle ports. See: https://github.com/s1n4/leptus/issues/55
 cross_domains(_Route, _Req, State) ->
-        {['_'], State}.
-
+    {['_'], State}.
 %%%GET Methods
 get("/", Req, State) ->
     %The broker's "info" endpoint; returns some possibly useful information
@@ -429,33 +456,11 @@ put("/application/:appname/reconfigure", Req, State) ->
     {RCode, RBody, RState} = handle_reconfigure_put(Req, State, XER, Appname, ReqBody),
     ?AUDI(Req, Bts, XER, Rcode),
     {RCode, RBody, RState}.
-
 %%%POST methods
 post("/application/delete", Req, State) ->
     %This follows the AWS S3 Multi Key Delete: http://docs.aws.amazon.com/AmazonS3/latest/API/multiobjectdeleteapi.html
-    %Except I added an additional special value called "*"
     {Bts, XER} = init_api_call(Req),
-    {RCode, RBody, RState} = case try
-             B = maps:get(<<"appnames">>, jiffy:decode(leptus_req:body_raw(Req), [return_maps])),
-             true = erlang:is_list(B),
-             B
-        catch _:_ ->
-            invalid
-        end
-        of
-        invalid -> {400, "Invalid PUT Body", State};
-        IDs ->
-            case IDs of
-                [] -> {200, "EMPTY PUT BODY", State};
-                _ ->
-                %<<"*">> ->
-                %this block deleted all apps, but decided this backdoor wasn't very RESTy
-                %%    {atomic, Apps} = mnesia:transaction(fun() -> mnesia:match_object(application, {application, '_', '_', '_', '_', '_', '_', '_', '_', '_'}, read) end),
-                %    AppsToDelete = lists:map(fun(X) -> {application, Appname, _,_,_,_,_,_,_,_} = X, Appname end, Apps),
-                    Returns = lists:map(fun(X) -> delete_app_helper(X, State, XER, Req) end, IDs),
-                    RL = lists:map(fun({RC, _, _}) -> RC end, Returns),
-                    {200, jiffy:encode(RL), State}
-            end
-        end,
+    ReqBody = leptus_req:body_raw(Req),
+    {RCode, RBody, RState} = handle_post_multidelete_app(Req, State, XER, ReqBody),
     ?AUDI(Req, Bts, XER, Rcode),
     {RCode, RBody, RState}.

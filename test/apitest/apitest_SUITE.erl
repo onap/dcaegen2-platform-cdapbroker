@@ -21,7 +21,7 @@
 -include_lib("common_test/include/ct.hrl").
 -include("../../src/application.hrl").
 -export([all/0, groups/0, init_per_suite/1, end_per_suite/1]).
--export([server_health_test/1, app_deploy/1, hydrator_deploy/1, app_teardown/1, app_test/1, app_reconfigure/1, test_failures/1, app_botch_flows/1, app_botch_delete/1, app_botch_consul_delete/1, delete_all/1,
+-export([server_health_test/1, app_deploy/1, hydrator_deploy/1, app_teardown/1, app_test/1, app_reconfigure/1, test_failures/1, app_botch_flows/1, app_botch_delete/1, app_botch_consul_delete/1,
         hydrator_app_teardown/1, hydrator_test/1,
         hydrator_wdeps_deploy/1,
         hydrator_wdeps_test/1,
@@ -39,8 +39,7 @@ all() -> [
           {group, hydratorapi},
           {group, apibotchedflows},
           {group, apibotcheddeleted},
-          {group, apibotchedconsuldeleted},
-          {group, apideleteall}
+          {group, apibotchedconsuldeleted}
          ].
 groups() ->  [
               {progapi, %prog-flow test
@@ -89,13 +88,6 @@ groups() ->  [
                 app_deploy,
                 app_botch_consul_delete,
                 app_teardown
-              ]},
-              {apideleteall,
-              [],
-              [
-                server_health_test,
-                app_deploy,
-                delete_all
               ]}
              ].
 
@@ -289,7 +281,11 @@ init_per_suite(_C) ->
     ]
     .
 
-end_per_suite(_C) ->
+end_per_suite(C) ->
+    %teardown the fake service and make sure it is gone
+    erlang:display("Tearing down fake service"),
+    {200, Srv} = setup_fake_testing_service(C, teardown),
+    true = Srv == "[]",
     _ = application:stop(cdapbroker).
 
 server_health_test(C) ->
@@ -763,18 +759,3 @@ test_failures(C) ->
          {<<"program_preferences">>, [{[{<<"program_type">>,<<"flows">>}, {<<"program_id">>, <<"WhoFlow">>}, {<<"program_pref">>, ?PLG(whoflowpref, C)}]}]}
          ]},
     {404, _} = httpabs:put(?XER, URL, "application/json", jiffy:encode(Body3)).
-
-delete_all(C) ->
-    %test invalid key
-    Body1 = jiffy:encode({[{<<"ids">>, [<<"hwtest">>]}]}),
-    {400,"State: Bad Request. Return Body: Invalid PUT Body"} = httpabs:post(?XER, ?SC([?PLG(broker_url, C), "/application/delete"]), "application/json", Body1),
-    %test invalid: not a list
-    Body2 = jiffy:encode({[{<<"appnames">>, <<"hwtest">>}]}),
-    {400,"State: Bad Request. Return Body: Invalid PUT Body"} = httpabs:post(?XER, ?SC([?PLG(broker_url, C), "/application/delete"]), "application/json", Body2),
-    %test undeploy a real app and also an app that is not deployed
-    Body3 = jiffy:encode({[{<<"appnames">>, [<<"hwtest">>, <<"dissapointment">>]}]}),
-    {200, "[200,404]"} = httpabs:post(?XER, ?SC([?PLG(broker_url, C), "/application/delete"]), "application/json", Body3),
-    %teardown the fake service and make sure it is gone
-    {200, Srv} = setup_fake_testing_service(C, teardown),
-    true = Srv == "[]".
-
