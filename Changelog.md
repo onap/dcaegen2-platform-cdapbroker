@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/) 
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [4.0.8] - Sep 25 2017
+* Greatly increase unit tests, at 27% now
+
 ## [4.0.7] - Sep 12 2017
 * Further unit testing
 * Update dependency to a Leptus PR that fixes the CORS port issue

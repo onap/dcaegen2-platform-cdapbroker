@@ -5,7 +5,7 @@ swagger: '2.0'
 
 # This is your document metadata
 info:
-  version: "4.0.7"
+  version: "4.0.8"
   title: CDAP Broker API
 
 paths:

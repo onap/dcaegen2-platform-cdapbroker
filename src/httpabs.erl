@@ -86,9 +86,8 @@ sanitize(URL) ->
 -spec post(string(), string()|binary(), string(), any()) -> httpstat().
 post(XER, URL, ContentType, Body) ->
     %post that sends the XER, no headers signature
-    Headers = [{"x-ecomp-requestid", XER}],
     U = sanitize(URL),
-    parse_response(httpc:request(post, {U, Headers, ContentType, Body}, [],[]), U).
+    parse_response(httpc:request(post, {U, [{"x-ecomp-requestid", XER}], ContentType, Body}, [],[]), U).
 
 -spec post(string(), string()|binary(), list(), string(), any()) -> httpstat().
 post(XER, URL, Headers, ContentType, Body) ->
@@ -100,19 +99,16 @@ post(XER, URL, Headers, ContentType, Body) ->
 get(XER, URL) ->
     %http get that always sends the XER.. even if the server doesn't want it; maybe this will blow up on me one day.
     U = sanitize(URL),
-    Headers = [{"x-ecomp-requestid", XER}],
-    parse_response(httpc:request(get, {U, Headers}, [], []), U).
+    parse_response(httpc:request(get, {U, [{"x-ecomp-requestid", XER}]}, [], []), U).
 
 -spec put(string(), string()|binary(), string(), any()) -> httpstat().
 put(XER, URL, ContentType, Body) ->
     %http put that always sends the XER
     U = sanitize(URL),
-    Headers = [{"x-ecomp-requestid", XER}],
-    parse_response(httpc:request(put, {U, Headers, ContentType, Body}, [],[]), U).
+    parse_response(httpc:request(put, {U, [{"x-ecomp-requestid", XER}], ContentType, Body}, [],[]), U).
 
 -spec delete(string(), string()|binary()) -> httpstat().
 delete(XER, URL) ->
     %http delete that always sends the XER
     U = sanitize(URL),
-    Headers = [{"x-ecomp-requestid", XER}],
-    parse_response(httpc:request(delete, {U, Headers}, [],[]), U).
+    parse_response(httpc:request(delete, {U, [{"x-ecomp-requestid", XER}]}, [],[]), U).

@@ -34,7 +34,8 @@
          to_str/1,
          ip_to_str/1,
          update_with_new_config_map/2,
-         ejson_to_map/1
+         ejson_to_map/1,
+         get_envs/0
         ]).
 
 %http://stackoverflow.com/questions/39757020/erlang-drying-up-stringbinary-concatenation
@@ -48,11 +49,14 @@ resolve_cbs(XER, ConsulURL) ->
      {IP, Port} = consul_interface:consul_get_service_ip_port(XER, "config_binding_service", ConsulURL),
      concat(["http://", IP, ":", integer_to_binary(Port)]).
 
+get_envs() ->
+    %breaking this out for mock testing of get_platform_envs_and_config()
+    {os:getenv("HOSTNAME"), os:getenv("CONSUL_HOST"), os:getenv("CDAP_CLUSTER_TO_MANAGE")}.
+
 get_platform_envs_and_config() ->
     %Get platform envs needed for broker operation, then fetch my config.
     %If something critical fails, returns [], else [ConsulURL, CDAPUrl, BoundConfigMap]
-    MyName = os:getenv("HOSTNAME"),
-    ConsulHost = os:getenv("CONSUL_HOST"),
+    {MyName, ConsulHost, CDAPEnvName} = ?MODULE:get_envs(),
     case MyName == false orelse ConsulHost == false of
         true -> [];
         false ->
@@ -69,7 +73,7 @@ get_platform_envs_and_config() ->
             %First, we will check for environmnental variables for a cluster *NAME*
             %If that is not found, then we will check out bound config for a fully bound URL
             %If that is also not found, let it crash baby.
-            CDAPURL = case os:getenv("CDAP_CLUSTER_TO_MANAGE") of
+            CDAPURL = case CDAPEnvName of
                  false ->
                     list_to_binary(concat(["http://", lists:nth(1, maps:get(<<"cdap_cluster_to_manage">>, BoundConfigMap))])); %cbs returns ip:port. need http:// or will get "no adaptors found" error
                  CDAPName ->
