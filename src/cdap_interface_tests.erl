@@ -29,15 +29,61 @@
            form_service_json_from_service_tuple/4,
            get_app_preferences/4,
            get_app_config/4,
-           get_pipeline_healthcheck/5
+           get_pipeline_healthcheck/5,
+           get_app_healthcheck_program/5
           ]).
+
+-include("application.hrl").
+
+get_app_healthcheck_program_test() ->
+    P = #program{type = <<"flows">>, id = <<"WhoFlow">>},
+    try meck:new(httpabs, [passthrough]) catch _:_ -> ok end,
+
+    %not found
+    meck:expect(httpabs, get, fun(_XER, URL) -> case URL of
+                                  "http://666.666.666.666:666/v3/namespaces/testns/apps/1234appNOTFOUND/flows/WhoFlow" -> {404, ""}
+                              end end),
+    ?assert(get_app_healthcheck_program("", "1234%%%%^@#$%@#$%#$^@$.appNOTFOUND", "testns", "http://666.666.666.666:666", P) == 400),
+
+    %found but malformed status
+    MalformedReturn = jiffy:encode({[{<<"nostatus">>, <<"FOR YOU">>}]}),
+    meck:expect(httpabs, get, fun(_XER, URL) -> case URL of
+                                  "http://666.666.666.666:666/v3/namespaces/testns/apps/1234appNOTFOUND/flows/WhoFlow" -> {200, ""};
+                                  "http://666.666.666.666:666/v3/namespaces/testns/apps/1234appNOTFOUND/flows/WhoFlow/status" -> {200, MalformedReturn}
+                              end end),
+    ?assert(get_app_healthcheck_program("", "1234%%%%^@#$%@#$%#$^@$.appNOTFOUND", "testns", "http://666.666.666.666:666", P) == 400),
+
+    %bad status code
+    BadStatus = jiffy:encode({[{<<"status">>, <<"NOTRUNNING">>}]}),
+    meck:expect(httpabs, get, fun(_XER, URL) -> case URL of
+                                  "http://666.666.666.666:666/v3/namespaces/testns/apps/1234appNOTFOUND/flows/WhoFlow" -> {200, ""};
+                                  "http://666.666.666.666:666/v3/namespaces/testns/apps/1234appNOTFOUND/flows/WhoFlow/status" -> {500, BadStatus}
+                              end end),
+    ?assert(get_app_healthcheck_program("", "1234%%%%^@#$%@#$%#$^@$.appNOTFOUND", "testns", "http://666.666.666.666:666", P) == 400),
+
+    %found but bad status
+    BadReturn = jiffy:encode({[{<<"status">>, <<"NOTRUNNING">>}]}),
+    meck:expect(httpabs, get, fun(_XER, URL) -> case URL of
+                                  "http://666.666.666.666:666/v3/namespaces/testns/apps/1234appNOTFOUND/flows/WhoFlow" -> {200, ""};
+                                  "http://666.666.666.666:666/v3/namespaces/testns/apps/1234appNOTFOUND/flows/WhoFlow/status" -> {200, BadReturn}
+                              end end),
+    ?assert(get_app_healthcheck_program("", "1234%%%%^@#$%@#$%#$^@$.appNOTFOUND", "testns", "http://666.666.666.666:666", P) == 400),
+
+    %all good
+    GoodReturn = jiffy:encode({[{<<"status">>, <<"RUNNING">>}]}),
+    meck:expect(httpabs, get, fun(_XER, URL) -> case URL of
+                                  "http://666.666.666.666:666/v3/namespaces/testns/apps/1234appNOTFOUND/flows/WhoFlow" -> {200, ""};
+                                  "http://666.666.666.666:666/v3/namespaces/testns/apps/1234appNOTFOUND/flows/WhoFlow/status" -> {200, GoodReturn}
+                              end end),
+    ?assert(get_app_healthcheck_program("", "1234%%%%^@#$%@#$%#$^@$.appNOTFOUND", "testns", "http://666.666.666.666:666", P) == 200),
+
+    meck:unload(httpabs).
 
 get_pipeline_healthcheck_test() ->
     FakeReturn = jiffy:encode({[{<<"status">>, <<"SCHEDULED">>}]}),
     try meck:new(httpabs, [passthrough]) catch _:_ -> ok end,
     %notfound
     meck:expect(httpabs, get, fun(_XER, URL) -> case URL of
-                                  "http://666.666.666.666:666/v3/namespaces/testns/apps/1234app/schedules/dataPipelineSchedule/status"  -> {200, FakeReturn};
                                    "http://666.666.666.666:666/v3/namespaces/testns/apps/1234appNOTFOUND/schedules/dataPipelineSchedule/status" -> {404, ""}
                               end end),
     ?assert(get_pipeline_healthcheck("", "1234%%%%^@#$%@#$%#$^@$.appNOTFOUND", "testns", "http://666.666.666.666:666", 666) == 400),

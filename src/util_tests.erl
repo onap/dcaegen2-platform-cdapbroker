@@ -112,6 +112,3 @@ resolve_cbs_test() ->
     ?assert(resolve_cbs("", "") == "http://666.666.666.666:10000"),
     meck:unload(consul_interface).
 
-
-
-
