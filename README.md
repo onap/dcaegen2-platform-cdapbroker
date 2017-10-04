@@ -123,8 +123,9 @@ This leaves the question of who/what/when/where/why/how streams and datasets sho
 For now, this is an open question. It can always be done on the CDAP management interface by an operations team in the meantime.  
 
 # On Version Bumping (Development)
-Currently the CDAP Broker Version is in three places in this repo..
+Currently the CDAP Broker Version is in four places in this repo..
 1. rebar.config
 2. src/cdapbroker.app.src
-3. swagger spec
+3. swagger/swagger.yaml
+4. pom.xml
 If you make a developmemt change, please bump in all places

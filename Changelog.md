@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/) 
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [4.0.10] - Oct 4 2017
+* Finally eliminate entry.sh after help from a relx engineer, BEAM is now PID 1
+
 ## [4.0.9] - Sep 26 2017
 * Add unit tests for consul_interface, 32% now
 

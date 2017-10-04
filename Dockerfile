@@ -7,7 +7,6 @@ ENV TERM=xterm
 ADD src /tmp/src
 ADD test /tmp/test
 ADD rebar.config /tmp
-ADD entry.sh /tmp
 ADD config /tmp/config 
 
 WORKDIR /tmp
@@ -27,4 +26,7 @@ ENV BROKER_TEST_TYPE=DOCKER
 
 #run
 EXPOSE 7777
-ENTRYPOINT ["/tmp/entry.sh"]
+
+#see https://github.com/erlang/rebar3/issues/1593
+ENTRYPOINT ["./_build/default/rel/cdapbroker/bin/cdapbroker"]
+CMD ["foreground"]
