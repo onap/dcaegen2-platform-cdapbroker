@@ -145,7 +145,7 @@ get_my_version() ->
 
 gen_uuid() ->
     %generate an RFC compliant v1 uuid using lib
-    uuid:to_string(uuid:uuid1()).
+    uuid:to_string(uuid:uuid4()).
 
 iso() ->
     %generate 8601 ts

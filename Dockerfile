@@ -1,4 +1,4 @@
-FROM erlang:19.3
+FROM erlang:21
 MAINTAINER tommy at research dot eh tee tee dot com
 
 ENV TERM=xterm
